@@ -129,15 +129,16 @@ public:
 
     as_ = rclcpp_action::create_server<TFSubscription>(
         this,
-        "republish_tfs",
+        "tf2_web_republisher",
         std::bind(&TFRepublisher::goalCB, this, _1, _2),
         std::bind(&TFRepublisher::cancelCB, this, _1),
         std::bind(&TFRepublisher::acceptCB, this, _1));
 
 
-    tf_republish_service_ = this->create_service<RepublishTFs>("republish_tfs",
-                                                  std::bind(&TFRepublisher::requestCB, this, _1, _2));
-  
+    tf_republish_service_ = this->create_service<RepublishTFs>(
+        "republish_tfs",
+        std::bind(&TFRepublisher::requestCB, this, _1, _2));
+    RCLCPP_INFO(this->get_logger(), "TFRepublisher constructor completed");
   }
 
   ~TFRepublisher() {}
@@ -145,8 +146,6 @@ public:
   rclcpp_action::CancelResponse cancelCB(
       const std::shared_ptr<GoalHandle> gh)
   {
-    std::scoped_lock l(goals_mutex_);
-    
     RCLCPP_DEBUG(this->get_logger(), "GoalHandle canceled");
     
     // search for goal handle and remove it from active_goals_ list
@@ -239,7 +238,6 @@ public:
                                                 [this, goal_info]() -> void { this->processGoal(goal_info); });    
 
     {
-      std::scoped_lock l(goals_mutex_);
       // add new goal to list of active goals/clients
       active_goals_.push_back(goal_info);
     }
@@ -274,7 +272,6 @@ public:
                                                     [this, request_info]() -> void { this->processRequest(request_info); });
 
     {
-      std::scoped_lock l(requests_mutex_);
       // add new request to list of active requests
       active_requests_.push_back(request_info);
     }
@@ -316,8 +313,6 @@ public:
       try
       {
         // protecting tf_buffer
-        std::scoped_lock lock (tf_buffer_mutex_);
-
         // lookup transformation for tf_pair
         transform = tf_buffer_->lookupTransform(it->getTargetFrame(),
                                                 it->getSourceFrame(),
