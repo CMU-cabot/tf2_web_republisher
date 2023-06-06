@@ -1,4 +1,6 @@
-<package>
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
   <name>tf2_web_republisher</name>
   <version>0.3.2</version>
   <description>Republishing of Selected TFs</description>
@@ -12,24 +14,16 @@
   <url type="bugtracker">https://github.com/RobotWebTools/tf2_web_republisher/issues</url>
   <url type="repository">https://github.com/RobotWebTools/tf2_web_republisher</url>
 
-  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <build_depend>actionlib</build_depend>
-  <build_depend>actionlib_msgs</build_depend>
-  <build_depend>geometry_msgs</build_depend>
-  <build_depend>roscpp</build_depend>
-  <build_depend>tf2_ros</build_depend>
-  <build_depend>tf</build_depend>
-  <build_depend>message_generation</build_depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rosidl_default_generators</depend>
+  <depend>rosidl_default_runtime</depend>
 
-  <run_depend>actionlib</run_depend>
-  <run_depend>actionlib_msgs</run_depend>
-  <run_depend>geometry_msgs</run_depend>
-  <run_depend>roscpp</run_depend>
-  <run_depend>tf2_ros</run_depend>
-  <run_depend>tf</run_depend>
-  <run_depend>message_runtime</run_depend>
-
-  <test_depend>rospy</test_depend>
-  <test_depend>rostest</test_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
 </package>

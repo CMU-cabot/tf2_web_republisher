@@ -35,9 +35,10 @@
  */
 
 
-#include <tf/tfMessage.h>
-#include <tf/transform_datatypes.h>
-
+#include <geometry_msgs/msg/transform.hpp>
+#include <tf2/utils.h>
+#include <tf2/transform_datatypes.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 class TFPair
 {
@@ -114,9 +115,9 @@ public:
     return trans_thres_;
   }
 
-  void updateTransform(geometry_msgs::TransformStamped& update)
+  void updateTransform(geometry_msgs::msg::TransformStamped& update)
   {
-    tf::transformMsgToTF(update.transform, tf_received_);
+    tf2::fromMsg(update.transform, tf_received_);
     updated_ = true;
   }
 
@@ -161,12 +162,12 @@ private:
   float angular_thres_;
   float trans_thres_;
 
-  tf::Transform tf_transmitted_;
-  tf::Transform tf_received_;
+  tf2::Transform tf_transmitted_;
+  tf2::Transform tf_received_;
 
   bool updated_;
   bool first_transmission_;
 
 };
 
-typedef boost::shared_ptr<TFPair> TFPairPtr;
+typedef std::shared_ptr<TFPair> TFPairPtr;

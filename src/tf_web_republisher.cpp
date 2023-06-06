@@ -35,39 +35,43 @@
  */
 
 #include <sstream>
+#include <thread>
 
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2/utils.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
-#include <boost/thread/mutex.hpp>
-#include "boost/thread.hpp"
-
-#include <tf/tfMessage.h>
-#include <tf/transform_datatypes.h>
-#include <geometry_msgs/TransformStamped.h>
-
-#include <actionlib/server/simple_action_server.h>
-#include <tf2_web_republisher/TFSubscriptionAction.h>
-
-#include <tf2_web_republisher/RepublishTFs.h>
-#include <tf2_web_republisher/TFArray.h>
+#include "rclcpp_action/rclcpp_action.hpp"
+#include "tf2_web_republisher/action/tf_subscription.hpp"
+#include "tf2_web_republisher/srv/republish_t_fs.hpp"
+#include "tf2_web_republisher/msg/tf_array.hpp"
 
 #include "tf_pair.h"
 
-class TFRepublisher
+using namespace std::placeholders;
+
+class TFRepublisher: public rclcpp::Node
 {
 protected:
-  typedef actionlib::ActionServer<tf2_web_republisher::TFSubscriptionAction> TFTransformServer;
-  typedef TFTransformServer::GoalHandle GoalHandle;
+  using TFArray = tf2_web_republisher::msg::TFArray;
+  using TFSubscription = tf2_web_republisher::action::TFSubscription;
+  using RepublishTFs = tf2_web_republisher::srv::RepublishTFs;
+  using TFSubscriptionGoal = tf2_web_republisher::action::TFSubscription::Goal;
+  using GoalHandle = rclcpp_action::ServerGoalHandle<TFSubscription>;
 
-  typedef tf2_web_republisher::RepublishTFs::Request Request;
-  typedef tf2_web_republisher::RepublishTFs::Response Response;
+  typedef rclcpp_action::Server<TFSubscription>::SharedPtr TFTransformServer;
+  using RepublishTFsRequest = tf2_web_republisher::srv::RepublishTFs::Request;
+  using RepublishTFsResponse = tf2_web_republisher::srv::RepublishTFs::Response;
+  
 
-  ros::NodeHandle nh_;
-  ros::NodeHandle priv_nh_;
+  //rclcpp::Node node_;
+  //ros::NodeHandle nh_;
+  //ros::NodeHandle priv_nh_;
 
   TFTransformServer as_;
-  ros::ServiceServer tf_republish_service_;
+  rclcpp::Service<RepublishTFs>::SharedPtr tf_republish_service_;
 
   // base struct that holds information about the TFs
   // a client (either Service or Action) has subscribed to
@@ -75,85 +79,92 @@ protected:
   {
     std::vector<TFPair> tf_subscriptions_;
     unsigned int client_ID_;
-    ros::Timer  timer_;
+    rclcpp::TimerBase::SharedPtr  timer_;
   };
 
   // struct for Action client info
   struct ClientGoalInfo : ClientInfo
   {
-    GoalHandle handle;
+   std::shared_ptr<GoalHandle> handle;
   };
 
   // struct for Service client info
   struct ClientRequestInfo : ClientInfo
   {
-    ros::Publisher pub_;
-    ros::Duration unsub_timeout_;
-    ros::Timer unsub_timer_;
+    rclcpp::Publisher<TFArray>::SharedPtr pub_;
+    std::chrono::nanoseconds unsub_timeout_;
+    rclcpp::TimerBase::SharedPtr unsub_timer_;
   };
 
-  std::list<boost::shared_ptr<ClientGoalInfo> > active_goals_;
-  boost::mutex goals_mutex_;
+  std::list<std::shared_ptr<ClientGoalInfo> > active_goals_;
+  std::mutex goals_mutex_;
 
-  std::list<boost::shared_ptr<ClientRequestInfo> > active_requests_;
-  boost::mutex requests_mutex_;
+  std::list<std::shared_ptr<ClientRequestInfo> > active_requests_;
+  std::mutex requests_mutex_;
 
-  // tf2 buffer and transformer
-#if ROS_VERSION_MINOR < 10
-  tf2::Buffer tf_buffer_;
-  tf2::TransformListener tf_listener_;
-#else
-  tf2_ros::Buffer tf_buffer_;
-  tf2_ros::TransformListener tf_listener_;
-#endif
-  boost::mutex tf_buffer_mutex_;
+  tf2_ros::Buffer * tf_buffer_;
+  tf2_ros::TransformListener * tf_listener_;
+  std::mutex tf_buffer_mutex_;
 
   unsigned int client_ID_count_;
 
 public:
 
-  TFRepublisher(const std::string& name) :
-    nh_(),
+  TFRepublisher() :
+      Node("tf2_web_republisher"),
+      client_ID_count_(0)
+  {
+    /*
     as_(nh_,
         name,
-        boost::bind(&TFRepublisher::goalCB, this, _1),
-        boost::bind(&TFRepublisher::cancelCB, this, _1),
+        std::bind(&TFRepublisher::goalCB, this, _1),
+        std::bind(&TFRepublisher::cancelCB, this, _1),
         false),
     priv_nh_("~"),
     tf_buffer_(),
     tf_listener_(tf_buffer_),
-    client_ID_count_(0)
-  {
-    tf_republish_service_ = nh_.advertiseService("republish_tfs",
-                                                 &TFRepublisher::requestCB,
-                                                 this);
-    as_.start();
+    */
+    tf_buffer_ = new tf2_ros::Buffer(this->get_clock());
+    tf_listener_ = new tf2_ros::TransformListener(*tf_buffer_);
+
+    as_ = rclcpp_action::create_server<TFSubscription>(
+        this,
+        "republish_tfs",
+        std::bind(&TFRepublisher::goalCB, this, _1, _2),
+        std::bind(&TFRepublisher::cancelCB, this, _1),
+        std::bind(&TFRepublisher::acceptCB, this, _1));
+
+
+    tf_republish_service_ = this->create_service<RepublishTFs>("republish_tfs",
+                                                  std::bind(&TFRepublisher::requestCB, this, _1, _2));
+  
   }
 
   ~TFRepublisher() {}
 
-
-
-  void cancelCB(GoalHandle gh)
+  rclcpp_action::CancelResponse cancelCB(
+      const std::shared_ptr<GoalHandle> gh)
   {
-    boost::mutex::scoped_lock l(goals_mutex_);
-
-    ROS_DEBUG("GoalHandle canceled");
-
+    std::scoped_lock l(goals_mutex_);
+    
+    RCLCPP_DEBUG(this->get_logger(), "GoalHandle canceled");
+    
     // search for goal handle and remove it from active_goals_ list
-    for(std::list<boost::shared_ptr<ClientGoalInfo> >::iterator it = active_goals_.begin(); it != active_goals_.end();)
+    for(std::list<std::shared_ptr<ClientGoalInfo> >::iterator it = active_goals_.begin(); it != active_goals_.end();)
     {
       ClientGoalInfo& info = **it;
       if(info.handle == gh)
       {
         it = active_goals_.erase(it);
-        info.timer_.stop();
-        info.handle.setCanceled();
-        return;
+        info.timer_->cancel();
+        auto msg = std::make_shared<TFSubscription::Result>();
+        gh->canceled(msg);
+        return rclcpp_action::CancelResponse::ACCEPT;
       }
       else
         ++it;
     }
+    return rclcpp_action::CancelResponse::REJECT;
   }
 
   const std::string cleanTfFrame( const std::string frame_id ) const
@@ -169,7 +180,7 @@ public:
    * Set up the contents of \p tf_subscriptions_ in
    * a ClientInfo struct
    */
-  void setSubscriptions(boost::shared_ptr<ClientInfo> info,
+  void setSubscriptions(std::shared_ptr<ClientInfo> info,
                         const std::vector<std::string>& source_frames,
                         const std::string& target_frame_,
                         float angular_thres,
@@ -192,20 +203,30 @@ public:
     }
   }
 
-  void goalCB(GoalHandle gh)
+  rclcpp_action::GoalResponse goalCB(
+    const rclcpp_action::GoalUUID /* unused */,
+    std::shared_ptr<const TFSubscription::Goal> goal)
+      //void goalCB(GoalHandle gh)
   {
-    ROS_DEBUG("GoalHandle request received");
+    RCLCPP_DEBUG(this->get_logger(), "Received goal request with frame: %s", goal->target_frame.c_str());
+    RCLCPP_DEBUG(this->get_logger(), "GoalHandle request received");
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }    
 
+  void acceptCB(const std::shared_ptr<GoalHandle> gh) {
     // accept new goals
-    gh.setAccepted();
+    //gh.setAccepted();
 
     // get goal from handle
-    const tf2_web_republisher::TFSubscriptionGoal::ConstPtr& goal = gh.getGoal();
+    //const tf2_web_republisher::TFSubscriptionGoal::ConstPtr& goal = gh.getGoal();
 
     // generate goal_info struct
-    boost::shared_ptr<ClientGoalInfo> goal_info = boost::make_shared<ClientGoalInfo>();
+    std::shared_ptr<ClientGoalInfo> goal_info = std::make_shared<ClientGoalInfo>();
+    
     goal_info->handle = gh;
     goal_info->client_ID_ = client_ID_count_++;
+    
+    auto goal = gh->get_goal();
 
     // add the tf_subscriptions to the ClientGoalInfo object
     setSubscriptions(goal_info,
@@ -214,68 +235,63 @@ public:
                      goal->angular_thres,
                      goal->trans_thres);
 
-    goal_info->timer_ = nh_.createTimer(ros::Duration(1.0 / goal->rate),
-                                        boost::bind(&TFRepublisher::processGoal, this, goal_info, _1));
+    goal_info->timer_ = this->create_wall_timer(std::chrono::duration<float>(1.0 / goal->rate),
+                                                [this, goal_info]() -> void { this->processGoal(goal_info); });    
 
     {
-      boost::mutex::scoped_lock l(goals_mutex_);
+      std::scoped_lock l(goals_mutex_);
       // add new goal to list of active goals/clients
       active_goals_.push_back(goal_info);
     }
-
   }
 
-  bool requestCB(Request& req, Response& res)
+  
+  void requestCB(const std::shared_ptr<RepublishTFsRequest> req,
+                 std::shared_ptr<RepublishTFsResponse>      res)
   {
-    ROS_DEBUG("RepublishTF service request received");
+    RCLCPP_DEBUG(this->get_logger(), "RepublishTF service request received");
     // generate request_info struct
-    boost::shared_ptr<ClientRequestInfo> request_info = boost::make_shared<ClientRequestInfo>();
+    auto request_info = std::make_shared<ClientRequestInfo>();
 
     request_info->client_ID_ = client_ID_count_;
     std::stringstream topicname;
     topicname << "tf_repub_" << client_ID_count_++;
 
-    request_info->pub_ = priv_nh_.advertise<tf2_web_republisher::TFArray>(topicname.str(), 10, true);
+    request_info->pub_ = this->create_publisher<tf2_web_republisher::msg::TFArray>(topicname.str(), 10);
 
     // add the tf_subscriptions to the ClientGoalInfo object
     setSubscriptions(request_info,
-                     req.source_frames,
-                     req.target_frame,
-                     req.angular_thres,
-                     req.trans_thres);
+                     req->source_frames,
+                     req->target_frame,
+                     req->angular_thres,
+                     req->trans_thres);
 
-    request_info->unsub_timeout_ = req.timeout;
-    request_info->unsub_timer_ = nh_.createTimer(request_info->unsub_timeout_,
-                                                 boost::bind(&TFRepublisher::unadvertiseCB, this, request_info, _1),
-                                                 true); // only fire once
+    request_info->unsub_timeout_ = rclcpp::Duration(req->timeout).to_chrono<std::chrono::nanoseconds>();
+    request_info->unsub_timer_ = this->create_wall_timer(request_info->unsub_timeout_,
+                                                        [this, request_info]() -> void {this->unadvertiseCB(request_info);});
 
-    request_info->timer_ = nh_.createTimer(ros::Duration(1.0 / req.rate),
-                                           boost::bind(&TFRepublisher::processRequest, this, request_info, _1));
+    request_info->timer_ = this->create_wall_timer(std::chrono::duration<float>(1.0 / req->rate),
+                                                    [this, request_info]() -> void { this->processRequest(request_info); });
 
     {
-      boost::mutex::scoped_lock l(requests_mutex_);
+      std::scoped_lock l(requests_mutex_);
       // add new request to list of active requests
       active_requests_.push_back(request_info);
     }
-    res.topic_name = request_info->pub_.getTopic();
-    ROS_INFO_STREAM("Publishing requested TFs on topic " << res.topic_name);
-
-    return true;
+    res->topic_name = request_info->pub_->get_topic_name();
+    RCLCPP_INFO(this->get_logger(), "Publishing requested TFs on topic %s", res->topic_name.c_str());
   }
 
-  void unadvertiseCB(boost::shared_ptr<ClientRequestInfo> request_info, const ros::TimerEvent&)
+  void unadvertiseCB(std::shared_ptr<ClientRequestInfo> request_info)
   {
-    ROS_INFO_STREAM("No subscribers on tf topic for request "
-                     << request_info->client_ID_
-                     << " for " << request_info->unsub_timeout_.toSec()
-                     << " seconds. Unadvertising topic:"
-                     << request_info->pub_.getTopic());
-    request_info->pub_.shutdown();
-    request_info->unsub_timer_.stop();
-    request_info->timer_.stop();
+    RCLCPP_INFO(this->get_logger(), "No subscribers on tf topic for request %d for %.2f seconds. Unadvertising topic: %s",
+                request_info->client_ID_, request_info->unsub_timeout_.count()/1e9f, request_info->pub_->get_topic_name());
+    request_info->pub_ = nullptr;
+    request_info->unsub_timer_->cancel();
+    request_info->timer_->cancel();
 
     // search for ClientRequestInfo struct and remove it from active_requests_ list
-    for(std::list<boost::shared_ptr<ClientRequestInfo> >::iterator it = active_requests_.begin(); it != active_requests_.end(); ++it)
+    for(std::list<std::shared_ptr<ClientRequestInfo> >::iterator it = active_requests_.begin(); it != active_requests_.end(); ++it)
     {
       ClientRequestInfo& info = **it;
       if(info.pub_ == request_info->pub_)
@@ -287,7 +303,7 @@ public:
   }
 
   void updateSubscriptions(std::vector<TFPair>& tf_subscriptions,
-                           std::vector<geometry_msgs::TransformStamped>& transforms)
+                           std::vector<geometry_msgs::msg::TransformStamped>& transforms)
   {
     // iterate over tf_subscription vector
     std::vector<TFPair>::iterator it ;
@@ -295,47 +311,43 @@ public:
 
     for (it=tf_subscriptions.begin(); it!=end; ++it)
     {
-      geometry_msgs::TransformStamped transform;
+      geometry_msgs::msg::TransformStamped transform;
 
       try
       {
         // protecting tf_buffer
-        boost::mutex::scoped_lock lock (tf_buffer_mutex_);
+        std::scoped_lock lock (tf_buffer_mutex_);
 
         // lookup transformation for tf_pair
-        transform = tf_buffer_.lookupTransform(it->getTargetFrame(),
-                                               it->getSourceFrame(),
-                                               ros::Time(0));
+        transform = tf_buffer_->lookupTransform(it->getTargetFrame(),
+                                                it->getSourceFrame(),
+                                                rclcpp::Time());
 
         // If the transform broke earlier, but worked now (we didn't get
         // booted into the catch block), tell the user all is well again
         if (!it->is_okay)
         {
           it->is_okay = true;
-          ROS_INFO_STREAM("Transform from "
-                          << it->getSourceFrame()
-                          << " to "
-                          << it->getTargetFrame()
-                          << " is working again at time "
-                          << transform.header.stamp.toSec());
+          RCLCPP_INFO(this->get_logger(), "Transform from %s to %s is working again at time %d.%d",
+                      it->getSourceFrame().c_str(), it->getTargetFrame().c_str(), transform.header.stamp.sec, transform.header.stamp.nanosec);
         }
         // update tf_pair with transformtion
         it->updateTransform(transform);
       }
-      catch (tf2::TransformException ex)
+      catch (tf2::TransformException &ex)
       {
         // Only log an error if the transform was okay before
         if (it->is_okay)
         {
           it->is_okay = false;
-          ROS_ERROR("%s", ex.what());
+          RCLCPP_ERROR(this->get_logger(), "%s", ex.what());
         }
       }
 
       // check angular and translational thresholds
       if (it->updateNeeded())
       {
-        transform.header.stamp = ros::Time::now();
+        transform.header.stamp = this->get_clock()->now();
         transform.header.frame_id = it->getTargetFrame();
         transform.child_frame_id = it->getSourceFrame();
 
@@ -348,58 +360,57 @@ public:
     }
   }
 
-  void processGoal(boost::shared_ptr<ClientGoalInfo> goal_info, const ros::TimerEvent& )
+  void processGoal(std::shared_ptr<ClientGoalInfo> goal_info)
   {
-    tf2_web_republisher::TFSubscriptionFeedback feedback;
+    auto feedback = std::make_shared<tf2_web_republisher::action::TFSubscription::Feedback>();
 
     updateSubscriptions(goal_info->tf_subscriptions_,
-                        feedback.transforms);
+                        feedback->transforms);
 
-    if (feedback.transforms.size() > 0)
+    if (feedback->transforms.size() > 0)
     {
       // publish feedback
-      goal_info->handle.publishFeedback(feedback);
-      ROS_DEBUG("Client %d: TF feedback published:", goal_info->client_ID_);
+      goal_info->handle->publish_feedback(feedback);
+      RCLCPP_DEBUG(this->get_logger(), "Client %d: TF feedback published:", goal_info->client_ID_);
     } else
     {
-      ROS_DEBUG("Client %d: No TF frame update needed:", goal_info->client_ID_);
+      RCLCPP_DEBUG(this->get_logger(), "Client %d: No TF frame update needed:", goal_info->client_ID_);
     }
   }
 
-  void processRequest(boost::shared_ptr<ClientRequestInfo> request_info, const ros::TimerEvent& )
+  void processRequest(std::shared_ptr<ClientRequestInfo> request_info)
   {
-    if (request_info->pub_.getNumSubscribers() == 0)
+    if (request_info->pub_->get_subscription_count() == 0)
     {
-      request_info->unsub_timer_.start();
+      request_info->unsub_timer_->reset();
     }
     else
     {
-      request_info->unsub_timer_.stop();
+      request_info->unsub_timer_->cancel();
     }
 
-    tf2_web_republisher::TFArray array_msg;
+    auto array_msg = std::make_shared<tf2_web_republisher::msg::TFArray>();
     updateSubscriptions(request_info->tf_subscriptions_,
-                        array_msg.transforms);
+                        array_msg->transforms);
 
-    if (array_msg.transforms.size() > 0)
+    if (array_msg->transforms.size() > 0)
     {
       // publish TFs
-      request_info->pub_.publish(array_msg);
-      ROS_DEBUG("Request %d: TFs published:", request_info->client_ID_);
+      request_info->pub_->publish(*array_msg);
+      RCLCPP_DEBUG(this->get_logger(), "Request %d: TFs published:", request_info->client_ID_);
     }
     else
     {
-      ROS_DEBUG("Request %d: No TF frame update needed:", request_info->client_ID_);
+      RCLCPP_DEBUG(this->get_logger(), "Request %d: No TF frame update needed:", request_info->client_ID_);
     }
   }
 };
 
 int main(int argc, char **argv)
 {
-  ros::init(argc, argv, "tf2_web_republisher");
-
-  TFRepublisher tf2_web_republisher(ros::this_node::getName());
-  ros::spin();
-
+  rclcpp::init(argc, argv);  
+  auto tf2_web_republisher = std::make_shared<TFRepublisher>();
+  rclcpp::spin(tf2_web_republisher);
+  rclcpp::shutdown();
   return 0;
 }
