@@ -157,7 +157,6 @@ public:
         it = active_goals_.erase(it);
         info.timer_->cancel();
         auto msg = std::make_shared<TFSubscription::Result>();
-        gh->canceled(msg);
         return rclcpp_action::CancelResponse::ACCEPT;
       }
       else
