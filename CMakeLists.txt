@@ -80,9 +80,16 @@ target_link_libraries(${PROJECT_NAME}_node "${cpp_typesupport_target}")
 #############
 
 ## Mark executables and/or libraries for installation
-install(TARGETS
-  ${PROJECT_NAME}_node
-  RUNTIME DESTINATION lib/${PROJECT_NAME}
+# install(TARGETS
+#   ${PROJECT_NAME}_node
+#   RUNTIME DESTINATION lib/${PROJECT_NAME}
+# )
+## This is a work around to use "tf2_web_republisher" as the executable name.
+## Could not figure out how to deal with the same target name issue (executable and typesupport)
+install(PROGRAMS
+  ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}_node
+  RENAME ${PROJECT_NAME}
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 #############
