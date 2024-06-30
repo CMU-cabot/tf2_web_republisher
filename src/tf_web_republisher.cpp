@@ -282,7 +282,6 @@ public:
   {
     RCLCPP_INFO(this->get_logger(), "No subscribers on tf topic for request %d for %.2f seconds. Unadvertising topic: %s",
                 request_info->client_ID_, request_info->unsub_timeout_.count()/1e9f, request_info->pub_->get_topic_name());
-    request_info->pub_ = nullptr;
     request_info->unsub_timer_->cancel();
     request_info->timer_->cancel();
 
@@ -292,6 +291,7 @@ public:
       ClientRequestInfo& info = **it;
       if(info.pub_ == request_info->pub_)
       {
+        request_info->pub_ = nullptr;
         active_requests_.erase(it);
         return;
       }
@@ -376,7 +376,9 @@ public:
   {
     if (request_info->pub_->get_subscription_count() == 0)
     {
-      request_info->unsub_timer_->reset();
+      if (request_info->unsub_timer_->is_canceled()) {
+        request_info->unsub_timer_->reset();
+      }
     }
     else
     {
